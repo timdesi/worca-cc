@@ -64,7 +64,7 @@ const OPEN_BACKOFF_MS = 15;
 /** Latest schema version. Bump + append a new migration step when the DDL grows.
  *  Exported so migration tests assert "reached the module's current version"
  *  instead of hardcoding the number — a schema bump then touches no test file. */
-export const SCHEMA_VERSION = 95;
+export const SCHEMA_VERSION = 98;
 
 /** store_meta row holding the install's default guardrail set id (JSON string). */
 export const GUARDRAILS_DEFAULT_META_KEY = 'guardrails:default';
@@ -840,7 +840,7 @@ ${STEP_QUESTIONS_DDL}
  * against the live schema so the gap can be healed regardless of the stamp.
  */
 const INCREMENTAL_COLUMNS = {
-  designs:                { models_json: 'TEXT', pictures: 'INTEGER NOT NULL DEFAULT 1', sound_json: 'TEXT' },   // v93: the design's own lead and builder picks ({lead?, builder?}); NULL = the Models page's; v94: the design's Pictures switch, 1 = on; v95: the design's sound choice
+  designs:                { models_json: 'TEXT', pictures: 'INTEGER NOT NULL DEFAULT 1', sound_json: 'TEXT', origin_thread_id: 'TEXT' },   // v93: the design's own lead and builder picks ({lead?, builder?}); NULL = the Models page's; v94: the design's Pictures switch, 1 = on; v95: the design's sound choice; v97: the chat that asked for the design (NULL = none, or made before v97)
   req_cost_ledger:        { brief_id: 'INTEGER', attachment_id: 'TEXT', helper_message_id: 'INTEGER',
                             engine: 'TEXT', step: 'TEXT', cost_kind: 'TEXT', input_tokens: 'INTEGER', output_tokens: 'INTEGER' },   // v74: a brief look's spend (feature_seq is 0 then); v77: a file's read or ask; v78: a helper call (A3 D13); v89: 9c (engine, step, billed|estimated|unknown, tokens)
   req_features:           { early_start_reason: 'TEXT', model_json: 'TEXT' },   // v85: the reason given for starting a feature before Ready, kept until a run starts; NULL = none; v89: the feature's { engine, model, effort } (9c D2); NULL = before 9c
@@ -938,6 +938,7 @@ const INCREMENTAL_COLUMNS = {
                             resume_pipeline_id: 'TEXT',   // v44: a one-off "resume this paused run" ticket (NULL = starts a new run)
                             preset_id: 'TEXT' },   // v63: the run preset this run follows (read at fire time); NULL = none
   projects:               { vcs: 'TEXT' },   // v69: 'git' | 'none' (CONTRACT §1); NULL reads as 'git'
+  tool_tabs:              { target: 'TEXT' },   // #1064 chat links: a Files tab's target — heals a tool_tabs table an earlier numbering (v84, v87) made without it
 };
 
 /** v23: per-loop-wire cycle budgets, the graph-engine twin of
@@ -1091,6 +1092,25 @@ CREATE TABLE IF NOT EXISTS pr_watch_runs (
   created_at TEXT NOT NULL,
   FOREIGN KEY (pr_url) REFERENCES pr_watches(pr_url) ON DELETE CASCADE,
   FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE SET NULL
+);
+`;
+
+// v96 (#1064 slice 3; first written as v84, then v87): the tool panel's chat and project tabs, mirrored by the page (PUT /api/tools/tabs) so the chat's
+// tab tools work with no page open; the assistant's open_tab adds rows here first (delivered = 0). The worca server is
+// the only writer (src/core/tool-tabs-mirror.mjs).
+const TOOL_TABS_DDL = `
+CREATE TABLE IF NOT EXISTS tool_tabs (
+  owner     TEXT NOT NULL DEFAULT '',     -- the signed-in person on a shared deployment, '' otherwise
+  scope     TEXT NOT NULL,                -- chat:<threadId> | project:<projectKey>
+  id        TEXT NOT NULL,                -- tab_… (ui/public/tool-tabs.mjs)
+  kind      TEXT NOT NULL,                -- browser | terminal | files | changes | …
+  url       TEXT,                         -- a Browser tab's address
+  target    TEXT,                         -- a Files tab's file or folder: JSON { path, dir?, line?, endLine?, root?, member? }
+  opened_by TEXT NOT NULL DEFAULT 'user', -- user | assistant
+  delivered INTEGER NOT NULL DEFAULT 1,   -- 0: the assistant opened it and no page has taken it in yet
+  at        INTEGER NOT NULL,
+  pos       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (owner, scope, id)
 );
 `;
 
@@ -1579,7 +1599,7 @@ CREATE TABLE IF NOT EXISTS designs (
   project_key TEXT, thread_id TEXT, engine TEXT, status TEXT NOT NULL DEFAULT 'empty',
   current_build TEXT, version INTEGER NOT NULL DEFAULT 0,
   created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, models_json TEXT,
-  pictures INTEGER NOT NULL DEFAULT 1, sound_json TEXT);
+  pictures INTEGER NOT NULL DEFAULT 1, sound_json TEXT, origin_thread_id TEXT);
 CREATE INDEX IF NOT EXISTS designs_updated ON designs(updated_at);
 CREATE TABLE IF NOT EXISTS design_builds (
   id TEXT PRIMARY KEY, design_id TEXT NOT NULL, round INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL,
@@ -1673,6 +1693,7 @@ const INCREMENTAL_TABLES = {
   design_agents:      DESIGN_DDL,  // v92
   design_cost_ledger: DESIGN_DDL,  // v92
   design_pictures:    DESIGN_PICTURES_DDL,  // v94
+  tool_tabs: TOOL_TABS_DDL,  // v96 (#1064)
 };
 
 /**
@@ -2875,6 +2896,11 @@ export function migrate(db) {
     if (current < 94) db.exec(DESIGN_PICTURES_DDL);
     // v95 Design sound: designs.sound_json (the design's sound choice, D2) — INCREMENTAL_COLUMNS, added by the hoisted
     // repairSchemaGaps (a v92+ DB) or by the v92 DDL above (an older DB). First written as v92.
+    if (current < 96) db.exec(TOOL_TABS_DDL);   // v96 the tool panel's tab mirror (#1064 slice 3; first written as v84, then v87)
+    // v97: designs.origin_thread_id (the plain chat that asked for the design; the design's own chat stays thread_id) —
+    // INCREMENTAL_COLUMNS, added by the hoisted repairSchemaGaps (a v92+ DB) or by the v92 DDL above (an older DB).
+    // v98: chats with a design are plain chats — a design chat from before (mode 'design') keeps its design (designs.thread_id).
+    if (current < 98) db.exec("UPDATE ask_threads SET mode = NULL WHERE mode = 'design'");
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
