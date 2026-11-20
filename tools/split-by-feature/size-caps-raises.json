@@ -36,5 +36,7 @@
   { "file": "ui/server.mjs", "from": 10541, "to": 10544, "commit": "d6f6475b8",
     "why": "dev's own growth: Stillhet feature 1 (#1205 to #1243, merged from d6f6475b8) added a net 3 lines to the residual ui/server.mjs (10456 to 10459 on dev); measured with wc -l on this merge" },
   { "file": "ui/server.mjs", "from": 10544, "to": 10573, "commit": "beb686c22",
-    "why": "Models P1 Task 2: the /vendor/brand-icons route; measured with grep -c" }
+    "why": "Models P1 Task 2: the /vendor/brand-icons route; measured with grep -c" },
+  { "file": "ui/server.mjs", "from": 10573, "to": 10580, "commit": "1442adc27",
+    "why": "hands-free voice (PR #1468, from 1442adc27): the voice merge in startAskTurn (supersedeRefusal / appendSupersedingMessage imports, the askSupersedePrecheck pre-check, the ask-superseded broadcast) and its _testing.setSupersedePrecheck added 7 lines to the residual ui/server.mjs, outside the route regions; measured with wc -l on dev b0fd40227 with the PR applied" }
 ]
